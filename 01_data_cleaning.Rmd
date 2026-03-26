@@ -1,0 +1,211 @@
+---
+title: "Data Cleaning and Variable Derivation"
+author: "[Author Name]"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    code_folding: show
+    theme: flatly
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo    = TRUE,
+  warning = FALSE,
+  message = FALSE
+)
+```
+
+## 1. Load packages
+
+```{r packages}
+required_packages <- c("tidyverse", "here", "janitor", "skimr", "knitr")
+
+installed <- rownames(installed.packages())
+to_install <- setdiff(required_packages, installed)
+if (length(to_install) > 0) install.packages(to_install)
+
+library(tidyverse)
+library(here)
+library(janitor)   # clean_names(), tabyl()
+library(skimr)     # skim() for quick data summaries
+library(knitr)
+```
+
+---
+
+## 2. Import raw data
+
+```{r import}
+raw <- read_csv(here("data", "acorn_data.csv"))
+
+# Standardize column names to snake_case
+raw <- clean_names(raw)
+
+cat("Dimensions:", nrow(raw), "rows ×", ncol(raw), "columns\n")
+glimpse(raw)
+```
+
+---
+
+## 3. Initial data quality check
+
+```{r quality-check}
+# Overview of missingness, distributions, and variable types
+skim(raw)
+```
+
+```{r duplicate-check}
+# Check for duplicate patient identifiers
+n_dupes <- raw %>%
+  count(record_id) %>%       # replace patient_id with your ID variable
+  filter(n > 1) %>%
+  nrow()
+
+cat("Duplicate IDs found:", n_dupes, "\n")
+```
+
+---
+
+## 4. Apply inclusion / exclusion criteria
+
+```{r exclusions}
+# Document each exclusion step clearly for the CONSORT/flow diagram
+excl_log <- list()
+
+# Step 1: Starting cohort
+excl_log[["01_starting"]] <- nrow(raw)
+
+# Step 2: Exclude missing baseline WBC
+df <- raw %>% filter(!is.na(baseline_wbc))
+excl_log[["02_missing_wbc"]] <- nrow(df)
+
+# Step 3: Exclude baseline WBC > 100
+df <- df %>% filter(baseline_wbc <= 100)
+excl_log[["03_wbc_gt100"]] <- nrow(df)
+
+# Print exclusion log
+excl_table <- tibble(
+  Step        = names(excl_log),
+  N_remaining = unlist(excl_log),
+  N_excluded  = c(0, -diff(unlist(excl_log)))
+)
+
+knitr::kable(
+  excl_table,
+  caption = "Exclusion log",
+  col.names = c("Step", "N remaining", "N excluded at this step")
+)
+```
+
+---
+
+## 5. Variable derivation and recoding
+
+```{r recode}
+#identify variables that need to be factor vars but are not character
+factor_vars <- c(
+  "inhosp_mortality28",
+  "death14_newrrt14",
+  "baseline_coma_delirium",
+  "baseline_anyvasopressor",
+  "newrrt28",
+  "MAKE14"
+  
+)
+
+#select variables of interest
+df <- df %>%rename(id=record_id)%>%
+                        dplyr::select(id, trt_group, inhosp_mortality28, death14_newrrt14, icufreedays28, delc14, comagdelcfreedays14, comagdelc14, persistent_renal_dysfunction28, rrtfreedays28, newrrt28, newrrt14, highest_cr_28, age, sex, race.eth, baseline_sofa, baseline_coma_delirium, incident_aki_with_onstudy_14.factor, CKD, sepsis, received_vancomycin_14, received_assigned_therapy_28, MAKE14, preill_creat_calculate, preill_creat, preill_creat_observed,
+                                      baseline_vent, baseline_anyvasopressor, source_of_infection, location, priorhd, days_assigned_therapy_14, baseline_wbc, baseline_neutropenia)%>%
+  mutate(n=1)%>%
+  #create white race
+  mutate(race_white = (ifelse(race.eth=="White, Non-Hispanic", 1, 0)))%>%
+  #create CKD variable
+                          mutate(CKD = ifelse(CKD==2,1,CKD))%>%
+                          mutate(CKD = (ifelse(is.na(CKD),0,CKD)))%>%
+  #make character variables factor
+  mutate(across(where(is.character()), as.factor)) %>%
+  
+  #make other variables factor
+  mutate(across(all_of(factor_vars), as.factor)) %>%
+  #make sure incident AKI is ordered
+  mutate(incident_aki_with_onstudy_14.factor = ordered(smart_abx$incident_aki_with_onstudy_14.factor,
+                                                         levels = c("Alive without AKI", "Stage 1 AKI", 
+                                     
+                                                               "Stage 2 AKI", "Stage 3 AKI", "Died")))
+  
+  
+
+df <- df %>%
+  mutate(
+
+    # --- Interaction terms ---
+    T_wbc      = wbc      * trt_group,
+    T_SOFA     = baseline_sofa     * trt_group,
+    T_neutropenia = baseline_neutropenia * trt_group
+
+  )
+```
+
+---
+
+## 6. Handle missing data
+
+```{r missingness}
+# Summary of missingness in analysis variables
+analysis_vars <- c(
+  "mortality", "wbc", "decade", "charlson", "SOFA",
+  "time_to_rx", "non_white", "T_wbc", "T_charlson", "T_SOFA"
+)
+
+missing_summary <- df %>%
+  select(all_of(analysis_vars)) %>%
+  summarise(across(everything(), ~ sum(is.na(.)))) %>%
+  pivot_longer(everything(), names_to = "variable", values_to = "n_missing") %>%
+  mutate(pct_missing = round(n_missing / nrow(df) * 100, 1))
+
+knitr::kable(
+  missing_summary,
+  caption = "Missing data summary for analysis variables"
+)
+```
+
+```{r missing-handling}
+# Complete case analysis
+df_analysis <- df %>% drop_na(all_of(analysis_vars))
+cat("Complete cases:", nrow(df_analysis), "\n")
+
+```
+
+---
+
+## 7. Final variable check
+
+```{r final-check}
+df_analysis %>%
+  select(all_of(analysis_vars)) %>%
+  skim()
+```
+
+---
+
+## 8. Save analytic dataset
+
+```{r save}
+saveRDS(df_analysis, here("data", "analysis_dataset.rds"))
+cat("Analytic dataset saved to data/analysis_dataset.rds\n")
+cat("N =", nrow(df_analysis), "patients\n")
+```
+
+---
+
+## 9. Session info
+
+```{r session-info}
+sessionInfo()
+
+print("Data cleaning complete! Proceed to 02_descriptive")
+```
