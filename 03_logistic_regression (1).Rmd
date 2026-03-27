@@ -1,0 +1,541 @@
+---
+title: "Regression Analysis — Effect Modification by Baseline WBC"
+author: "Dan Rzewnicki"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    code_folding: show
+    theme: flatly
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo    = TRUE,
+  warning = FALSE,
+  message = FALSE
+)
+```
+
+## 1. Load packages
+
+```{r packages}
+required_packages <- c(
+  "tidyverse", "here", "gtsummary", "broom",
+  "lmtest", "MASS", "knitr"
+)
+
+installed <- rownames(installed.packages())
+to_install <- setdiff(required_packages, installed)
+if (length(to_install) > 0) install.packages(to_install)
+
+library(tidyverse)
+library(here)
+library(gtsummary)
+library(broom)
+library(lmtest)
+library(MASS)
+library(knitr)
+```
+
+---
+
+## 2. Load data
+
+```{r load-data}
+df_analysis <- readRDS(here("data", "analysis_dataset.rds"))
+
+cat("Dimensions:", nrow(df_analysis), "rows ×", ncol(df_analysis), "columns\n")
+```
+
+---
+
+## 3. Model functions
+
+These two functions are defined once and reused across all outcomes and sensitivity
+analyses below, ensuring every model uses identical covariate sets.
+
+```{r model-functions}
+# Covariates used in every model — update here if the covariate set changes
+covariates <- c(
+  "trt_group",
+  "baseline_wbc",
+  "age",
+  "sex",
+  "baseline_sofa",
+  "baseline_vent",
+  "baseline_anyvasopressor",
+  "source_of_infection",
+  "location",
+  "preill_creat",
+  "priorhd"
+)
+
+# Interaction model: includes baseline_wbc * trt_group term
+interaction_model <- function(outcome_var, data) {
+  f <- as.formula(
+    paste(outcome_var, "~",
+          paste(covariates, collapse = " + "),
+          "+ baseline_wbc:trt_group")
+  )
+  glm(f, data = data, family = "binomial")
+}
+
+# Main effects model: no interaction term
+no_interaction_model <- function(outcome_var, data) {
+  f <- as.formula(
+    paste(outcome_var, "~", paste(covariates, collapse = " + "))
+  )
+  glm(f, data = data, family = "binomial")
+}
+
+# Helper: extract OR (95% CI) and p-value from a glm object
+extract_results <- function(model) {
+  mod_summary <- summary(model)
+  results <- cbind(
+    OR     = exp(coef(model)),
+    exp(confint(model)),
+    p      = mod_summary$coefficients[, "Pr(>|z|)"]
+  ) %>%
+    as.data.frame() %>%
+    rownames_to_column("term") %>%
+    rename(ci_low = `2.5 %`, ci_high = `97.5 %`) %>%
+    mutate(across(c(OR, ci_low, ci_high), ~ round(.x, 3)),
+           p = round(p, 4))
+  results
+}
+
+# Helper: format results as a clean kable table
+results_table <- function(results, caption = NULL) {
+  knitr::kable(
+    results,
+    caption   = caption,
+    col.names = c("Term", "OR", "95% CI low", "95% CI high", "p-value"),
+    align     = c("l", "r", "r", "r", "r")
+  )
+}
+```
+
+---
+
+## 4. Primary outcome — 28-day in-hospital mortality
+
+### 4a. Fit models
+
+```{r mortality-models}
+mortality_int  <- interaction_model("inhosp_mortality28", analysis_df)
+mortality_main <- no_interaction_model("inhosp_mortality28", analysis_df)
+```
+
+### 4b. Likelihood ratio test — interaction vs. main effects
+
+```{r mortality-lrt}
+lrtest(mortality_int, mortality_main)
+```
+
+### 4c. Interaction model results
+
+```{r mortality-int-results}
+mortality_int_results <- extract_results(mortality_int)
+results_table(mortality_int_results,
+              caption = "Table 2a. 28-day mortality — interaction model")
+```
+
+### 4d. Main effects model results
+
+```{r mortality-main-results}
+mortality_main_results <- extract_results(mortality_main)
+results_table(mortality_main_results,
+              caption = "Table 2b. 28-day mortality — main effects model")
+```
+
+### 4e. Formatted gtsummary table (for manuscript)
+
+```{r mortality-gtsummary}
+mortality_int %>%
+  tbl_regression(
+    exponentiate = TRUE,
+    label = list(
+      trt_group               ~ "Treatment group",
+      baseline_wbc            ~ "Baseline WBC",
+      age                     ~ "Age",
+      sex                     ~ "Sex",
+      baseline_sofa           ~ "Baseline SOFA score",
+      baseline_vent           ~ "Mechanical ventilation",
+      baseline_anyvasopressor ~ "Vasopressor use",
+      source_of_infection     ~ "Source of infection",
+      location                ~ "Location",
+      preill_creat            ~ "Pre-illness creatinine",
+      priorhd                 ~ "Prior heart disease"
+    )
+  ) %>%
+  bold_p(t = 0.05) %>%
+  modify_caption("Table 2: 28-day in-hospital mortality (interaction model)")
+```
+
+---
+
+## 5. Secondary outcome — MAKE-14
+
+### 5a. Fit models
+
+```{r make14-models}
+make14_int  <- interaction_model("MAKE14", analysis_df)
+make14_main <- no_interaction_model("MAKE14", analysis_df)
+```
+
+### 5b. Likelihood ratio test
+
+```{r make14-lrt}
+lrtest(make14_int, make14_main)
+```
+
+### 5c. Results
+
+```{r make14-results}
+results_table(extract_results(make14_int),
+              caption = "Table 3a. MAKE-14 — interaction model")
+
+results_table(extract_results(make14_main),
+              caption = "Table 3b. MAKE-14 — main effects model")
+```
+
+---
+
+## 6. Secondary outcome — Incident AKI (ordinal)
+
+Incident AKI is modeled using ordinal logistic regression (`MASS::polr`) given its
+ordered categorical nature. p-values are calculated from z-scores since polr does
+not return them directly.
+
+### 6a. Fit models
+
+```{r aki-models}
+aki_int <- MASS::polr(
+  incident_aki_with_onstudy_14.factor ~
+    trt_group + baseline_wbc + baseline_wbc:trt_group +
+    age + sex + baseline_sofa + baseline_vent +
+    baseline_anyvasopressor + preill_creat + priorhd +
+    source_of_infection + location,
+  data = analysis_df,
+  Hess = TRUE
+)
+
+aki_main <- MASS::polr(
+  incident_aki_with_onstudy_14.factor ~
+    trt_group + baseline_wbc +
+    age + sex + baseline_sofa + baseline_vent +
+    baseline_anyvasopressor + preill_creat + priorhd +
+    source_of_infection + location,
+  data = analysis_df,
+  Hess = TRUE
+)
+```
+
+### 6b. Likelihood ratio test
+
+```{r aki-lrt}
+anova(aki_int, aki_main, test = "Chisq")
+```
+
+### 6c. Interaction model results with p-values
+
+```{r aki-int-results}
+aki_coefs <- coef(summary(aki_int))
+z_values  <- aki_coefs[, "Value"] / aki_coefs[, "Std. Error"]
+p_values  <- 2 * pnorm(abs(z_values), lower.tail = FALSE)
+
+aki_int_results <- data.frame(
+  term    = rownames(aki_coefs),
+  OR      = round(exp(aki_coefs[, "Value"]), 3),
+  ci_low  = round(exp(confint(aki_int)[, 1]), 3),
+  ci_high = round(exp(confint(aki_int)[, 2]), 3),
+  p       = round(p_values, 4)
+)
+
+knitr::kable(
+  aki_int_results,
+  caption   = "Table 4. Incident AKI — ordinal logistic regression (interaction model)",
+  col.names = c("Term", "OR", "95% CI low", "95% CI high", "p-value")
+)
+```
+
+---
+
+## 7. Secondary outcome — Coma or delirium (comagdelc14)
+
+### 7a. Fit models
+
+```{r coma-models}
+coma_int  <- interaction_model("comagdelc14", analysis_df)
+coma_main <- no_interaction_model("comagdelc14", analysis_df)
+```
+
+### 7b. Likelihood ratio test
+
+```{r coma-lrt}
+lrtest(coma_int, coma_main)
+```
+
+### 7c. Results
+
+```{r coma-results}
+results_table(extract_results(coma_int),
+              caption = "Table 5a. Coma/delirium — interaction model")
+
+results_table(extract_results(coma_main),
+              caption = "Table 5b. Coma/delirium — main effects model")
+```
+
+---
+
+## 8. Sensitivity analyses
+
+All sensitivity analyses use 28-day in-hospital mortality as the outcome and follow
+the same interaction vs. main effects structure as the primary analysis.
+
+```{r sensitivity-function}
+# Runs both models, LRT, and prints tables for a given data subset
+run_sensitivity <- function(data, label) {
+
+  mod_int  <- interaction_model("inhosp_mortality28", data)
+  mod_main <- no_interaction_model("inhosp_mortality28", data)
+
+  list(
+    lrt          = lrtest(mod_int, mod_main),
+    int_results  = extract_results(mod_int),
+    main_results = extract_results(mod_main)
+  )
+}
+```
+
+### 8a. Sepsis + vancomycin recipients only
+
+```{r sens-sepsis-vanc}
+sepsis_vanc      <- analysis_df %>%
+  filter(received_vancomycin_14 == 1 & sepsis == "Yes")
+sens_sv          <- run_sensitivity(sepsis_vanc, "Sensitivity: sepsis + vancomycin")
+
+print(sens_sv$lrt)
+results_table(sens_sv$int_results,  "Sensitivity 1a. Sepsis + vancomycin — interaction")
+results_table(sens_sv$main_results, "Sensitivity 1b. Sepsis + vancomycin — main effects")
+```
+
+### 8b. Vancomycin recipients only
+
+```{r sens-vanc}
+vanc        <- analysis_df %>% filter(received_vancomycin_14 == 1)
+sens_vanc   <- run_sensitivity(vanc, "Sensitivity: vancomycin only")
+
+print(sens_vanc$lrt)
+results_table(sens_vanc$int_results,  "Sensitivity 2a. Vancomycin only — interaction")
+results_table(sens_vanc$main_results, "Sensitivity 2b. Vancomycin only — main effects")
+```
+
+### 8c. Baseline sepsis only
+
+```{r sens-sepsis}
+sepsis       <- analysis_df %>% filter(sepsis == "Yes")
+sens_sepsis  <- run_sensitivity(sepsis, "Sensitivity: sepsis only")
+
+print(sens_sepsis$lrt)
+results_table(sens_sepsis$int_results,  "Sensitivity 3a. Sepsis only — interaction")
+results_table(sens_sepsis$main_results, "Sensitivity 3b. Sepsis only — main effects")
+```
+
+### 8d. No sepsis at baseline
+
+```{r sens-no-sepsis}
+no_sepsis       <- analysis_df %>% filter(sepsis == "No")
+sens_no_sepsis  <- run_sensitivity(no_sepsis, "Sensitivity: no sepsis")
+
+print(sens_no_sepsis$lrt)
+results_table(sens_no_sepsis$int_results,  "Sensitivity 4a. No sepsis — interaction")
+results_table(sens_no_sepsis$main_results, "Sensitivity 4b. No sepsis — main effects")
+```
+
+### 8e. Excluding intra-abdominal infections
+
+```{r sens-no-abdominal}
+no_abdominal <- analysis_df %>%
+  filter(source_of_infection != "Intra-abdominal") %>%
+  mutate(source_of_infection = droplevels(source_of_infection))
+sens_no_abd  <- run_sensitivity(no_abdominal, "Sensitivity: exclude intra-abdominal")
+
+print(sens_no_abd$lrt)
+results_table(sens_no_abd$int_results,  "Sensitivity 5a. No intra-abdominal — interaction")
+results_table(sens_no_abd$main_results, "Sensitivity 5b. No intra-abdominal — main effects")
+```
+
+### 8f. Excluding neutropenic patients
+
+```{r sens-no-neutropenia}
+
+no_neutropenia <- analysis_df %>%
+  filter(baseline_neutroenia == "No") 
+sens_no_neutropenia  <- run_sensitivity(no_neutropenia, "Sensitivity: exclude neutropenic patients")
+
+print(sens_no_neutropenia$lrt)
+results_table(sens_no_neutropenia$int_results,  "Sensitivity 5a. No Neutropenia — interaction")
+results_table(sens_no_neutropenia$main_results, "Sensitivity 5b. No Neutropenia — main effects")
+
+```
+
+### 8g. Sensitivity — adding neutropenia as a covariate
+
+```{r sens-neutropenia}
+# Extend the standard covariate set for this analysis only
+covariates_neutropenia <- c(covariates, "neutropenia")
+
+# Define models inline — does not affect the global covariates vector
+neut_int <- glm(
+  as.formula(
+    paste("inhosp_mortality28 ~",
+          paste(covariates_neutropenia, collapse = " + "),
+          "+ baseline_wbc:trt_group")
+  ),
+  data   = analysis_df,
+  family = "binomial"
+)
+
+neut_main <- glm(
+  as.formula(
+    paste("inhosp_mortality28 ~",
+          paste(covariates_neutropenia, collapse = " + "))
+  ),
+  data   = smart_abx,
+  family = "binomial"
+)
+
+lrtest(neut_int, neut_main)
+
+results_table(extract_results(neut_int),
+              caption = "Sensitivity 6a. Neutropenia added — interaction model")
+results_table(extract_results(neut_main),
+              caption = "Sensitivity 6b. Neutropenia added — main effects model")
+```
+
+
+##9. Analyses by WBC Quartile
+
+
+###9a. 28-day mortality using WBC Quartile
+
+```{r quartile covariates}
+
+# Covariates used in every model — update here if the covariate set changes
+quartile_covariates <- c(
+  "trt_group",
+  "wbc_quartile",
+  "age",
+  "sex",
+  "baseline_sofa",
+  "baseline_vent",
+  "baseline_anyvasopressor",
+  "source_of_infection",
+  "location",
+  "preill_creat",
+  "priorhd"
+)
+```
+
+
+```{r quartile functions}
+
+# Interaction model: includes baseline_wbc * trt_group term
+quartile_interaction_model <- function(outcome_var, data) {
+  f <- as.formula(
+    paste(outcome_var, "~",
+          paste(covariates, collapse = " + "),
+          "+ wbc_quartile:trt_group")
+  )
+  glm(f, data = data, family = "binomial")
+}
+
+# Main effects model: no interaction term
+quartile_no_interaction_model <- function(outcome_var, data) {
+  f <- as.formula(
+    paste(outcome_var, "~", paste(quartile_covariates, collapse = " + "))
+  )
+  glm(f, data = data, family = "binomial")
+}
+
+```
+
+
+```{r mortality-models-quartile}
+mortality_int_quartile  <- quartile_interaction_model("inhosp_mortality28", analysis_df)
+mortality_main_quartile <- quartile_no_interaction_model("inhosp_mortality28", analysis_df)
+```
+
+
+
+```{r quartile-mortality-lrt}
+lrtest(mortality_int_quartile, mortality_main_quartile)
+```
+
+### 4c. Interaction model results
+
+```{r mortality-int-results}
+mortality_int_results_quartile <- extract_results(mortality_int_quartile)
+results_table(mortality_int_results_quartile,
+              caption = "Table 2a. 28-day mortality — interaction model by WBC Quartile")
+```
+
+
+```{r mortality-main-results-quartile}
+mortality_main_results_quartile <- extract_results(mortality_main_quartile)
+results_table(mortality_main_results_quartile,
+              caption = "Table 2b. 28-day mortality — main effects model by WBC Quartile")
+```
+
+## 10. Export all results to CSV
+
+```{r export}
+dir.create(here("output"), showWarnings = FALSE)
+
+# Primary outcome
+write.csv(mortality_int_results,
+          here("output", "results_mortality_interaction.csv"),  row.names = FALSE)
+write.csv(mortality_main_results,
+          here("output", "results_mortality_main.csv"),         row.names = FALSE)
+
+# Secondary outcomes
+write.csv(extract_results(make14_int),
+          here("output", "results_make14_interaction.csv"),     row.names = FALSE)
+write.csv(extract_results(coma_int),
+          here("output", "results_coma_interaction.csv"),       row.names = FALSE)
+write.csv(aki_int_results,
+          here("output", "results_aki_interaction.csv"),        row.names = FALSE)
+
+# Sensitivity analyses
+write.csv(sens_sv$int_results,
+          here("output", "results_sens_sepsis_vanc.csv"),       row.names = FALSE)
+write.csv(sens_vanc$int_results,
+          here("output", "results_sens_vanc.csv"),              row.names = FALSE)
+write.csv(sens_sepsis$int_results,
+          here("output", "results_sens_sepsis.csv"),            row.names = FALSE)
+write.csv(sens_no_sepsis$int_results,
+          here("output", "results_sens_no_sepsis.csv"),         row.names = FALSE)
+write.csv(sens_no_abd$int_results,
+          here("output", "results_sens_no_abdominal.csv"),      row.names = FALSE)
+write.csv(sens_no_neutropenia$int_results,
+          here("output", "results_sens_no_neutropenia.csv"))
+write.csv(extract_results(neut_int),
+          here("output", "results_sens_neutropenia.csv"), row.names = FALSE)
+
+#analyses by quartile
+write.csv(extract_results(mortality_int_quartile),
+          here("output", "results_mortality_quartile.csv"), row.names = FALSE)
+
+cat("All results exported to output/\n")
+```
+
+---
+
+## 10. Session info
+
+```{r session-info}
+sessionInfo()
+```
