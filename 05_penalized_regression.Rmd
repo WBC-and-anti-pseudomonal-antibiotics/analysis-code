@@ -1,0 +1,400 @@
+---
+title: "Penalized Regression — LASSO for Variable Selection"
+author: "[Author Name]"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    code_folding: show
+    theme: flatly
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo    = TRUE,
+  warning = FALSE,
+  message = FALSE
+)
+```
+
+## Overview
+
+This script fits a LASSO (least absolute shrinkage and selection operator) penalized
+logistic regression model to identify predictors of 28-day in-hospital mortality,
+including interaction terms with treatment group. The dataset is split into training
+(80%) and test (20%) sets prior to model fitting. Model performance is evaluated in
+the held-out test set using the area under the ROC curve (AUC) and a confusion matrix.
+
+---
+
+## 1. Load packages
+
+```{r packages}
+required_packages <- c(
+  "tidyverse", "here", "glmnet", "caret", "pROC", "knitr"
+)
+
+installed <- rownames(installed.packages())
+to_install <- setdiff(required_packages, installed)
+if (length(to_install) > 0) install.packages(to_install)
+
+library(tidyverse)
+library(here)
+library(glmnet)   # LASSO / ridge / elastic net
+library(caret)    # createDataPartition, confusionMatrix
+library(pROC)     # roc(), auc()
+library(knitr)
+```
+
+---
+
+## 2. Load data
+
+```{r load-data}
+df_analysis <- readRDS(here("data", "analysis_dataset.rds"))
+
+cat("Dimensions:", nrow(df_analysis), "rows x", ncol(df_analysis), "columns\n")
+```
+
+---
+
+## 3. Data preparation
+
+### 3a. Variable cleaning
+
+```{r cleaning}
+# Variables to convert to factors
+factor_vars <- c(
+  "trt_group",
+  "inhosp_mortality28",
+  "death14_newrrt14",
+  "delc14",
+  "comagdelc14",
+  "persistent_renal_dysfunction28",
+  "newrrt28",
+  "newrrt14",
+  "sex",
+  "CKD",
+  "received_vancomycin_14",
+  "received_assigned_therapy_28",
+  "MAKE14",
+  "baseline_vent",
+  "baseline_anyvasopressor",
+  "location",
+  "priorhd",
+  "baseline_neutropenia",
+  "race_white",
+  "race.eth"
+)
+
+df_analysis <- df_analysis %>%
+  mutate(across(all_of(factor_vars), as.factor)) %>%
+  mutate(id = as.numeric(id))
+```
+
+### 3b. Platelet — remove 12 missing
+
+```{r platelet}
+summary(df_analysis$baseline_platelet)
+cat("Missing baseline_platelet:", sum(is.na(df_analysis$baseline_platelet)), "\n")
+
+df_clean <- df_analysis %>%
+  filter(!is.na(baseline_platelet))
+
+cat("Rows after platelet filter:", nrow(df_clean), "\n")
+```
+
+### 3c. Temperature — convert Celsius recordings to Fahrenheit
+
+Some temperatures appear to have been recorded in Celsius (values < 40). These are
+converted to Fahrenheit using the standard formula. All remaining records with missing
+temperature are removed.
+
+```{r temperature}
+summary(df_clean$baseline_Temp)
+
+df_clean <- df_clean %>%
+  mutate(
+    clean_temp = ifelse(baseline_Temp > 40,
+                        baseline_Temp,                       # already Fahrenheit
+                        (baseline_Temp * (9 / 5)) + 32)     # convert from Celsius
+  ) %>%
+  filter(!is.na(clean_temp))
+
+cat("Temperature range after cleaning:\n")
+summary(df_clean$clean_temp)
+cat("Rows after temperature filter:", nrow(df_clean), "\n")
+```
+
+### 3d. Note on arterial pH
+
+```{r ph-note}
+cat("Missing baseline_pH_art:", sum(is.na(df_clean$baseline_pH_art)), "\n")
+# Arterial pH has >2200 missing values and is excluded from the model
+```
+
+---
+
+## 4. Define predictors
+
+Predictors are defined once here and referenced throughout. Interaction terms with
+treatment group are specified separately in the model matrix formula below.
+
+```{r predictors}
+# Main effect predictors
+predictors <- c(
+  "age",
+  "trt_group",
+  "sex",
+  "baseline_sofa",
+  "CKD",
+  "sepsis",
+  "baseline_vent",
+  "baseline_anyvasopressor",
+  "source_of_infection",
+  "location",
+  "priorhd",
+  "baseline_wbc",
+  "baseline_neutropenia",
+  "baseline_platelet",
+  "baseline_hemoglobin",
+  "clean_temp"
+)
+
+# Predictors that will have trt_group interaction terms
+interaction_predictors <- c(
+  "age",
+  "baseline_wbc",
+  "baseline_sofa",
+  "sepsis",
+  "baseline_neutropenia",
+  "baseline_platelet",
+  "baseline_hemoglobin",
+  "clean_temp"
+)
+
+cat("Main effect predictors:", length(predictors), "\n")
+cat("Interaction terms:", length(interaction_predictors), "\n")
+```
+
+---
+
+## 5. Train / test split
+
+The dataset is split 80% training / 20% test, stratified on baseline WBC to preserve
+its distribution across both sets. A seed is set for reproducibility.
+
+```{r split}
+set.seed(123)
+
+training_idx <- createDataPartition(
+  df_clean$baseline_wbc,
+  p    = 0.8,
+  list = FALSE
+)
+
+train_data <- df_clean[training_idx, ]
+test_data  <- df_clean[-training_idx, ]
+
+cat("Training set:", nrow(train_data), "rows\n")
+cat("Test set:    ", nrow(test_data),  "rows\n")
+```
+
+---
+
+## 6. Build model matrices
+
+`model.matrix()` expands categorical variables into dummy variables and creates the
+interaction terms. The intercept column (column 1) is dropped since `glmnet` adds
+its own.
+
+```{r matrix-formula}
+# Build interaction formula programmatically from the vectors defined in Section 4
+# This avoids hard-coding the formula and makes it easy to update
+interaction_terms <- paste(interaction_predictors, "trt_group", sep = ":")
+
+lasso_formula <- as.formula(
+  paste("~", paste(c(predictors, interaction_terms), collapse = " + "))
+)
+
+cat("Model formula:\n")
+print(lasso_formula)
+```
+
+```{r train-matrix}
+# Complete cases in training set
+train_complete <- train_data %>%
+  filter(complete.cases(across(all_of(c(predictors, "inhosp_mortality28")))))
+
+cat("Complete training cases:", nrow(train_complete),
+    "(removed", nrow(train_data) - nrow(train_complete), "with missing predictors)\n")
+
+x_train <- model.matrix(lasso_formula, data = train_complete)[, -1]
+y_train  <- train_complete$inhosp_mortality28
+```
+
+```{r test-matrix}
+# Complete cases in test set
+test_complete <- test_data %>%
+  filter(complete.cases(across(all_of(c(predictors, "inhosp_mortality28")))))
+
+cat("Complete test cases:", nrow(test_complete),
+    "(removed", nrow(test_data) - nrow(test_complete), "with missing predictors)\n")
+
+x_test <- model.matrix(lasso_formula, data = test_complete)[, -1]
+y_test  <- test_complete$inhosp_mortality28
+```
+
+---
+
+## 7. Fit LASSO model
+
+Cross-validation is used to select the optimal penalty parameter (lambda). The
+lambda that minimizes cross-validated deviance (`lambda.min`) is used for the
+final model.
+
+### 7a. Cross-validated lambda selection
+
+```{r cv-lasso}
+set.seed(123)
+
+cv_lasso <- cv.glmnet(
+  x      = x_train,
+  y      = y_train,
+  alpha  = 1,           # alpha = 1 is LASSO; alpha = 0 is ridge
+  family = "binomial",
+  nfolds = 10           # 10-fold cross-validation
+)
+
+plot(cv_lasso)
+title("Cross-validation curve — log(lambda) vs. deviance", line = 2.5)
+
+cat(sprintf("lambda.min:  %.5f  (minimizes CV error)\n", cv_lasso$lambda.min))
+cat(sprintf("lambda.1se:  %.5f  (most regularized within 1 SE of minimum)\n", cv_lasso$lambda.1se))
+```
+
+### 7b. Fit final model using lambda.min
+
+```{r final-model}
+model_lasso <- glmnet(
+  x      = x_train,
+  y      = y_train,
+  alpha  = 1,
+  family = "binomial",
+  lambda = cv_lasso$lambda.min
+)
+```
+
+---
+
+## 8. Model coefficients
+
+Variables with non-zero coefficients were retained by the LASSO. A coefficient of
+zero indicates the variable was penalized out of the model.
+
+```{r coefficients}
+coef_matrix <- coef(model_lasso)
+
+coef_df <- data.frame(
+  variable    = rownames(coef_matrix),
+  coefficient = as.numeric(coef_matrix[, 1])
+) %>%
+  filter(coefficient != 0, variable != "(Intercept)") %>%
+  mutate(
+    OR        = round(exp(coefficient), 3),
+    coefficient = round(coefficient, 4)
+  ) %>%
+  arrange(desc(abs(coefficient)))
+
+knitr::kable(
+  coef_df,
+  caption   = "Table. Non-zero LASSO coefficients with odds ratios",
+  col.names = c("Variable", "Coefficient", "Odds Ratio"),
+  align     = c("l", "r", "r")
+)
+
+cat("\nVariables retained:", nrow(coef_df), "\n")
+cat("Variables penalized to zero:",
+    nrow(coef_matrix) - 1 - nrow(coef_df), "\n")  # subtract intercept
+```
+
+---
+
+## 9. Model evaluation in test set
+
+### 9a. Predicted probabilities and class predictions
+
+```{r predictions}
+test_probs <- predict(model_lasso, newx = x_test, type = "response")[, 1]
+
+# Classify using 0.5 probability threshold
+outcome_levels   <- levels(test_complete$inhosp_mortality28)
+test_preds_factor <- factor(
+  ifelse(test_probs > 0.5, outcome_levels[2], outcome_levels[1]),
+  levels = outcome_levels
+)
+```
+
+### 9b. Confusion matrix
+
+```{r confusion-matrix}
+confusionMatrix(test_preds_factor, test_complete$inhosp_mortality28)
+```
+
+### 9c. ROC curve and AUC
+
+```{r roc-auc}
+roc_obj <- roc(
+  response  = test_complete$inhosp_mortality28,
+  predictor = test_probs,
+  quiet     = TRUE
+)
+
+cat(sprintf("AUC: %.3f (95%% CI: %.3f - %.3f)\n",
+            auc(roc_obj),
+            ci(roc_obj)[1],
+            ci(roc_obj)[3]))
+
+plot(roc_obj,
+     main = "ROC curve — LASSO model in test set",
+     col  = "#2166ac",
+     lwd  = 2)
+abline(a = 0, b = 1, lty = 2, col = "grey50")
+```
+
+---
+
+## 10. Export results
+
+```{r export}
+dir.create(here("output"), showWarnings = FALSE)
+
+write.csv(
+  coef_df,
+  here("output", "results_lasso_coefficients.csv"),
+  row.names = FALSE
+)
+
+# Save ROC data for potential use in figures script
+roc_data <- data.frame(
+  specificity = roc_obj$specificities,
+  sensitivity = roc_obj$sensitivities
+)
+
+write.csv(
+  roc_data,
+  here("output", "results_lasso_roc.csv"),
+  row.names = FALSE
+)
+
+cat("Results exported to output/\n")
+```
+
+---
+
+## 11. Session info
+
+```{r session-info}
+sessionInfo()
+```
