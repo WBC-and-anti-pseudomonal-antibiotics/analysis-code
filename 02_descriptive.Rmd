@@ -1,0 +1,222 @@
+---
+title: "Descriptive Statistics — Table 1"
+author: "Dan Rzewnicki"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    code_folding: show
+    theme: flatly
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo    = TRUE,
+  warning = FALSE,
+  message = FALSE
+)
+```
+
+## 1. Load packages
+
+```{r packages}
+required_packages <- c("tidyverse", "here", "tableone", "knitr")
+
+installed <- rownames(installed.packages())
+to_install <- setdiff(required_packages, installed)
+if (length(to_install) > 0) install.packages(to_install)
+
+library(tidyverse)
+library(here)
+library(tableone)
+library(knitr)
+```
+
+---
+
+## 2. Load data
+
+```{r load-data}
+df_analysis <- readRDS(here("data", "analysis_dataset.rds"))
+
+cat("Dimensions:", nrow(df_analysis), "rows ×", ncol(df_analysis), "columns\n")
+```
+
+---
+
+## 3. Define variables
+
+```{r define-vars}
+# All variables to include in Table 1
+myVars <- c(
+  "trt_group",
+  "vancomycin_day0",
+  "received_vancomycin_14",
+  "age",
+  "bmi",
+  "baseline_sofa",
+  "daysaccurate_timezero_firstanyantibiotics",
+  "CHARLSON",
+  "sex",
+  "race.eth",
+  "baseline_vent",
+  "prevalent_aki.factor",
+  "sepsis",
+  "source_of_infection",
+  "baseline_anyvasopressor",
+  "inhosp_mortality28",
+  "MAKE14",
+  "comagdelcfreedays14",
+  "baseline_coma_delirium",
+  "baseline_neutropenia"
+)
+
+# Categorical variables — will be summarized as n (%)
+catVars <- c(
+  "trt_group",
+  "vancomycin_day0",
+  "received_vancomycin_14",
+  "sex",
+  "race.eth",
+  "baseline_vent",
+  "prevalent_aki.factor",
+  "sepsis",
+  "source_of_infection",
+  "baseline_anyvasopressor",
+  "inhosp_mortality28",
+  "baseline_neutropenia",
+  "wbc_quartile"
+)
+# Continuous variables (everything in myVars not in catVars) will be
+# summarized as mean (SD) by default, or median (IQR) — see Section 4
+```
+
+---
+
+## 4. Table 1 — Overall cohort
+
+```{r table1-overall}
+table1 <- CreateTableOne(
+  vars       = myVars,
+  data       = df_analysis,
+  factorVars = catVars
+)
+
+# Print with clean formatting
+table1_print <- print(
+  table1,
+  quote       = FALSE,
+  noSpaces    = TRUE,
+  printToggle = FALSE,
+  nonnormal   = c(          # list any skewed continuous vars here for median (IQR)
+    "daysaccurate_timezero_firstanyantibiotics",
+    "CHARLSON",
+    "comagdelcfreedays14"
+  )
+)
+
+knitr::kable(
+  table1_print,
+  caption = "Table 1. Baseline characteristics of the overall cohort"
+)
+```
+
+---
+
+## 5. Table 1 — Stratified by treatment group
+
+```{r table1-stratified}
+table1_trt <- CreateTableOne(
+  vars       = myVars,
+  data       = df_analysis,
+  factorVars = catVars,
+  strata     = "trt_group"
+)
+
+table1_trt_print <- print(
+  table1_trt,
+  quote       = FALSE,
+  noSpaces    = TRUE,
+  printToggle = FALSE,
+  nonnormal   = c(
+    "daysaccurate_timezero_firstanyantibiotics",
+    "CHARLSON",
+    "comagdelcfreedays14"
+  ),
+  smd = TRUE    # standardized mean differences — useful for Table 1 balance checking
+)
+
+knitr::kable(
+  table1_trt_print,
+  caption = "Table 1 (stratified). Baseline characteristics by treatment group"
+)
+```
+
+---
+
+## 6. Table 1 - Stratified by WBC Quartile
+
+
+```{r table1-stratified-wbc-quartile}
+table1_trt <- CreateTableOne(
+  vars       = myVars,
+  data       = df_analysis,
+  factorVars = catVars,
+  strata     = "wbc_quartile"
+)
+
+table1_quartile_print <- print(
+  table1_trt,
+  quote       = FALSE,
+  noSpaces    = TRUE,
+  printToggle = FALSE,
+  nonnormal   = c(
+    "daysaccurate_timezero_firstanyantibiotics",
+    "CHARLSON",
+    "comagdelcfreedays14"
+  ),
+  smd = TRUE    # standardized mean differences — useful for Table 1 balance checking
+)
+
+knitr::kable(
+  table1_quartile_print,
+  caption = "Table 1 (stratified). Baseline characteristics by WBC Quartile"
+)
+```
+
+---
+
+## 7. Save tables
+
+```{r save-tables}
+dir.create(here("output"), showWarnings = FALSE)
+
+# Overall table
+write.csv(
+  table1_print,
+  file = here("output", "table1_overall.csv")
+)
+
+# Stratified table
+write.csv(
+  table1_trt_print,
+  file = here("output", "table1_stratified.csv")
+)
+
+#quartile table
+write.csv(
+  table1_quartile_print,
+  file = here("output", "table1_quartile.csv")
+)
+
+cat("Tables saved to output/\n")
+```
+
+---
+
+## 8. Session info
+
+```{r session-info}
+sessionInfo()
+```
