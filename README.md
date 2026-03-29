@@ -19,15 +19,18 @@ Because only the ACORN patient-level data is available, this repo focuses primar
 ```
 ├── README.md
 ├── data/
-│   └── README_data.md          # Data dictionary and access instructions
+│   └── README_data.md                           # Data dictionary and access instructions
 ├── code/
-│   ├── 01_data_cleaning.Rmd    # Data import, cleaning, and variable derivation
-│   ├── 02_descriptive.Rmd      # Table 1 and descriptive statistics
-│   ├── 03_logistic_regression.Rmd  # Primary logistic regression models
-│   ├── 04_figures.Rmd          # All manuscript figures
-│   └── 00_session_info.R       # R session and package version info
+│   ├── 01_data_cleaning.Rmd                     # Data import, cleaning, and variable derivation
+│   ├── 02_descriptive.Rmd                       # Table 1 and descriptive statistics
+│   ├── 03_logistic_regression.Rmd               # Primary logistic regression and sensitivity analyses
+│   ├── 04_figures.Rmd                           # All manuscript figures
+│   ├── 05_penalized_regression.Rmd              # LASSO penalized regression for variable selection
+│   ├── 06_analysis_code_IV.Rmd                  # Instrumental variable analysis
+│   ├── analysis_code_IV_response_to_review.R    # Reviewer-requested sensitivity analyses (IV)
+│   └── 00_session_info.R                        # R session and package version info
 ├── output/
-│   └── session_info.txt        # Captured session info at time of analysis
+│   └── session_info.txt                         # Captured session info at time of analysis
 └── LICENSE
 ```
 
@@ -52,22 +55,13 @@ A data dictionary describing all variables is provided in `data/README_data.md`.
 
 ## How to Reproduce the Analysis
 
-### Requirements
+Requirements
 
-- R version 4.3.0 or later (see `output/session_info.txt` for exact version used)
-- RStudio (recommended) or any R environment supporting R Markdown
-- The following R packages (installed automatically by `01_data_cleaning.Rmd` if missing):
+R version 4.3.0 or later (see output/session_info.txt for exact version used)
+RStudio (recommended) or any R environment supporting R Markdown
+The following R packages (installed automatically by each script if missing):
 
-| Package | Version used | Purpose |
-|---------|-------------|---------|
-| tidyverse | 2.0.0 | Data manipulation and plotting |
-| here | 1.0.1 | Reproducible file paths |
-| gtsummary | 1.7.2 | Table 1 and model summaries |
-| broom | 1.0.5 | Tidying model output |
-| lmtest | 0.9-40 | Likelihood ratio tests |
-| ResourceSelection | 0.3-6 | Hosmer-Lemeshow goodness-of-fit |
-| ggplot2 | 3.4.4 | Figures |
-| knitr | 1.45 | R Markdown rendering |
+PackageVersion usedPurposetidyverse2.0.0Data manipulation and plottinghere1.0.1Reproducible file pathstableone0.13.2Table 1 generationgtsummary1.7.2Model result tablesbroom1.0.5Tidying model outputlmtest0.9-40Likelihood ratio testsglmnet4.1-8LASSO penalized regressioncaret6.0-94Train/test splitting and model evaluationpROC1.18.4ROC curves and AUCMASS7.3-60Ordinal logistic regressionpurrr1.0.2Functional programming for model iterationpatchwork1.2.0Combining ggplot figuresscales1.3.0Axis formattingknitr1.45R Markdown rendering
 
 ### Steps
 
@@ -83,8 +77,9 @@ A data dictionary describing all variables is provided in `data/README_data.md`.
    ```r
    rmarkdown::render("code/01_data_cleaning.Rmd")
    rmarkdown::render("code/02_descriptive.Rmd")
-   rmarkdown::render("code/03_logistic_regression.Rmd")
+   rmarkdown::render("code/03_logistic_regression (1).Rmd")
    rmarkdown::render("code/04_figures.Rmd")
+   rmarkdown::render("code/05_penalized_regression.RMD")
    ```
 
 4. **Check session info** — compare your environment against `output/session_info.txt` if results differ
@@ -94,6 +89,15 @@ A data dictionary describing all variables is provided in `data/README_data.md`.
 ## License
 
 Code in this repository is licensed under the [MIT License](LICENSE). Data (if any included) are licensed under [CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/).
+
+---
+
+## Contributors
+
+| Contributor | Role | Code |
+|-------------|------|------|
+| Dan Rzewnicki | ACORN analyst | `01_` through `05_` scripts |
+| Rishi Chanderraj | IV analyst | `05_` through `07_` script |
 
 ---
 
