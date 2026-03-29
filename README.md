@@ -52,16 +52,31 @@ provided in the linked manuscript Supplement, and additional aggregate data will
 A data dictionary describing all variables is provided in `data/README_data.md`.
 
 ---
-
 ## How to Reproduce the Analysis
 
-Requirements
 
-R version 4.3.0 or later (see output/session_info.txt for exact version used)
-RStudio (recommended) or any R environment supporting R Markdown
-The following R packages (installed automatically by each script if missing):
+### Requirements
 
-PackageVersion usedPurposetidyverse2.0.0Data manipulation and plottinghere1.0.1Reproducible file pathstableone0.13.2Table 1 generationgtsummary1.7.2Model result tablesbroom1.0.5Tidying model outputlmtest0.9-40Likelihood ratio testsglmnet4.1-8LASSO penalized regressioncaret6.0-94Train/test splitting and model evaluationpROC1.18.4ROC curves and AUCMASS7.3-60Ordinal logistic regressionpurrr1.0.2Functional programming for model iterationpatchwork1.2.0Combining ggplot figuresscales1.3.0Axis formattingknitr1.45R Markdown rendering
+- R version 4.3.0 or later (see `output/session_info.txt` for exact version used)
+- RStudio (recommended) or any R environment supporting R Markdown
+- The following R packages (installed automatically by each script if missing):
+
+| Package | Version used | Purpose |
+|---------|-------------|---------|
+| tidyverse | 2.0.0 | Data manipulation and plotting |
+| here | 1.0.1 | Reproducible file paths |
+| tableone | 0.13.2 | Table 1 generation |
+| gtsummary | 1.7.2 | Model result tables |
+| broom | 1.0.5 | Tidying model output |
+| lmtest | 0.9-40 | Likelihood ratio tests |
+| glmnet | 4.1-8 | LASSO penalized regression |
+| caret | 6.0-94 | Train/test splitting and model evaluation |
+| pROC | 1.18.4 | ROC curves and AUC |
+| MASS | 7.3-60 | Ordinal logistic regression |
+| purrr | 1.0.2 | Functional programming for model iteration |
+| patchwork | 1.2.0 | Combining ggplot figures |
+| scales | 1.3.0 | Axis formatting |
+| knitr | 1.45 | R Markdown rendering |
 
 ### Steps
 
