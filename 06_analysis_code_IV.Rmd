@@ -1,0 +1,732 @@
+---
+title: "analysis_code_IV"
+author: "Rishi Chanderraj"
+date: "2026-03-29"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+I. Initial evaluation for Heterogeneity of Treatment Effect (HTE)
+
+To evaluate for heterogeneity of treatment effect modified by WBC, we will first conduct an instrumental variable analysis including a term for white blood cell count (WBC) and an interaction between Piperacillin-tazobactam treatment and WBC. A significant interaction between treatment suggests that impact of piperacillin-tazobactam is modified by WBC
+
+```{r}
+ hte_df<-read_csv("HTE_df.csv")
+
+m_original <- ivreg(
+  die_within_30d~ Piperacillin_tazobactam  +
+    decade + female + charlson_score + SOFA + 
+    time_to_rx+ non_white+
+    Piperacillin_tazobactam:wbc+wbc|
+    decade + female + charlson_score + SOFA+ 
+    non_white+
+    instrument + instrument:wbc+wbc+
+    time_to_rx,
+  data = hte_df
+)
+
+summary(m_original)
+
+```
+
+Test the relevance (condition 1) for the interaction model
+
+```{r}
+
+lm(Piperacillin_tazobactam~
+    decade + female + charlson_score + SOFA+ 
+    non_white+
+    instrument + instrument:wbc+wbc+
+    time_to_rx, data =hte_df)%>%
+  tidy(conf.int=T)%>%
+  mutate(across(where(is.numeric), ~round(.,3)))%>%
+  dplyr::select(term, estimate, conf.low, conf.high, p.value)%>%
+  unite("CI", conf.low, conf.high, sep=" to ")%>%
+  mutate(term = factor(term, levels=c("instrument","instrument:wbc","wbc","charlson_score",
+                                      "SOFA","decade","female","non_white","time_to_rx",
+                                      "(Intercept)")))%>%
+  arrange(term)
+```
+
+Test the relevance (condition 1) for the reduced model
+
+
+  
+```{r}
+lm(Piperacillin_tazobactam~
+    decade + female + charlson_score + SOFA+ 
+    non_white+
+    instrument + 
+    time_to_rx+wbc, data =hte_df)%>%
+  tidy(conf.int=T)%>%
+  mutate(across(where(is.numeric), ~round(.,3)))%>%
+  dplyr::select(term, estimate, conf.low, conf.high, p.value)%>%
+  unite("CI", conf.low, conf.high, sep=" to ")%>%
+  mutate(term = factor(term, levels=c("instrument","wbc","charlson_score",
+                                      "SOFA","decade","female","non_white","time_to_rx",
+                                      "(Intercept)")))%>%
+  arrange(term)
+```
+  
+  Test the exclusion restriction (condition 2) for the reduced model
+
+```{r}
+
+lm(die_within_30d~
+    decade + female + charlson_score + SOFA+ 
+    non_white+
+    instrument + instrument:wbc+wbc+Piperacillin_tazobactam:wbc+Piperacillin_tazobactam+
+    time_to_rx, data =hte_df)%>%
+  tidy(conf.int=T)%>%
+  mutate(across(where(is.numeric), ~round(.,3)))%>%
+  dplyr::select(term, estimate, conf.low, conf.high, p.value)%>%
+  unite("CI", conf.low, conf.high, sep=" to ")%>%
+  mutate(term = factor(term, levels=c("instrument","instrument:wbc","Piperacillin_tazobactam",
+  "wbc:Piperacillin_tazobactam","charlson_score","wbc","SOFA","decade","female","non_white","time_to_rx",
+                                      "(Intercept)")))%>%
+  arrange(term)
+
+lm(die_within_30d~
+    decade + female + charlson_score + SOFA+ 
+    non_white+
+    instrument + instrument+Piperacillin_tazobactam+
+    time_to_rx+wbc, data =hte_df)%>%
+  tidy(conf.int=T)%>%
+  mutate(across(where(is.numeric), ~round(.,3)))%>%
+  dplyr::select(term, estimate, conf.low, conf.high, p.value)%>%
+  unite("CI", conf.low, conf.high, sep=" to ")%>%
+  mutate(term = factor(term, levels=c("instrument","instrument:wbc","Piperacillin_tazobactam",
+  "wbc:Piperacillin_tazobactam","wbc","charlson_score","SOFA","decade","female","non_white","time_to_rx",
+                                      "(Intercept)")))%>%
+  arrange(term)
+
+lm(Piperacillin_tazobactam~
+    decade + female + charlson_score + SOFA+ 
+    non_white+
+    instrument + instrument+
+    time_to_rx, data =hte_df)%>%
+  tidy(conf.int=T)%>%
+  mutate(across(where(is.numeric), ~round(.,3)))%>%
+  dplyr::select(term, estimate, conf.low, conf.high, p.value)%>%
+  unite("CI", conf.low, conf.high, sep=" to ")%>%
+  mutate(term = factor(term, levels=c("instrument","instrument:wbc","wbc","charlson_score",
+                                      "SOFA","decade","female","non_white","time_to_rx",
+                                      "(Intercept)")))%>%
+  arrange(term)
+
+m_original <- ivreg(
+  die_within_30d~ Piperacillin_tazobactam:wbc  + Piperacillin_tazobactam+
+    wbc+
+    decade + female + charlson_score + SOFA + 
+    time_to_rx+ non_white|
+    decade + female + charlson_score + SOFA+ 
+    non_white+
+    instrument + instrument:wbc+wbc+
+    time_to_rx,
+  data = hte_df
+)
+
+summary(m_original)
+
+
+```
+
+II. Comparing the model fit including vs. excluding interaction term
+Next, we will compare an instrumental variable analysis that does not include an consideration of white blood cell count.
+
+```{r}
+
+
+m_reduced <- ivreg(
+  die_within_30d~ Piperacillin_tazobactam  +wbc+
+    decade + female + charlson_score + SOFA + 
+    time_to_rx+ non_white|
+    decade + female + charlson_score + SOFA+ wbc+
+    non_white+
+    instrument +
+    time_to_rx,
+  data = hte_df
+)
+
+
+summary(m_reduced)
+```
+
+We will compare the model fits between the model that includes the interaction and one that excludes the interaction to see which one better explains the data.
+
+```{r}
+
+
+anova(m_original,m_reduced)
+
+m_original%>%
+  tidy(conf.int = T)%>%
+  dplyr::select(term, estimate, conf.low, conf.high, p.value)%>%
+  mutate(across(where(is.numeric),~round(.,3)*100))%>%
+  unite("CI",conf.low, conf.high, sep=" to ")%>%
+  filter(!str_detect(term, "Intercept"))%>%
+  mutate(p.value = if_else(p.value<0.001, "<0.01",as.character(p.value)),
+         term = factor(term, levels=c("Piperacillin_tazobactam","Piperacillin_tazobactam:wbc",
+                                      "wbc","charlson_score","SOFA","decade","non_white","female",
+                                      "time_to_rx")))%>%
+  arrange(term)
+
+m_reduced%>%
+  tidy(conf.int = T)%>%
+  dplyr::select(term, estimate, conf.low, conf.high, p.value)%>%
+  mutate(across(c(estimate, conf.low, conf.high),~round(.,3)*100))%>%
+  mutate(p.value =round(p.value,3))%>%
+  unite("CI",conf.low, conf.high, sep=" to ")%>%
+  filter(!str_detect(term, "Intercept"))%>%
+  mutate(p.value = if_else(p.value<0.001, "<0.01",as.character(p.value)),
+         term = factor(term, levels=c("Piperacillin_tazobactam","Piperacillin_tazobactam:wbc",
+                                      "wbc","charlson_score","SOFA","decade","non_white","female",
+                                      "time_to_rx")))%>%
+  arrange(term)
+
+
+```
+III. Visualizing the impact of HTE across quartiles of WBC
+To visualize the heterogeneity of the impact of Piperacillin-tazobactam across WBC, we will split the cohort into quartiles and see piperacillin-tazobactam treatment is associated with mortality across quartiles.
+
+```{r}
+
+# Step 1: Fit a single pooled first-stage model
+pooled_first_stage <- lm(
+  Piperacillin_tazobactam ~ instrument + decade + charlson_score + sofa_max_24bcx+ time_to_rx + female + non_white,
+  data = hte_df,
+)
+
+# Step 2: Align rows and preserve necessary columns
+# Use model.frame to get rows used in the first-stage model
+hte_matched <- hte_df %>%
+  rownames_to_column(".rownames")%>%
+  inner_join(augment(pooled_first_stage))
+
+# Step 4: Perform quartile-specific second-stage IV regression using the pooled first-stage results
+# .fitted = the predicted traeatment from the first stage model
+
+hte_results <- hte_matched %>%
+  group_by(quartile) %>%
+  group_modify(~ {
+    model <- lm(
+      die_within_30d~ .fitted + decade + charlson_score + sofa_max_24bcx+ time_to_rx + female +non_white,
+      data = .,
+    )
+    tidy(model, conf.int = TRUE) %>% mutate(quartile = unique(.x$quartile))  # Add quartile to results
+  }) %>%
+  ungroup()%>%
+  mutate(OR = case_when(quartile ==1 ~"6.4% (2.3 to 10.5%)",
+                              quartile == 2~"0.3% (-7.5% to 8.4%)",
+                              quartile == 3~"-1.5% (-7.0 to 3.9%)",
+                              quartile ==4~"-3.1% (-7.8% to 1.5%)")%>%
+           factor(levels= c("-3.1% (-7.8% to 1.5%)","-1.5% (-7.0 to 3.9%)",
+                            "0.3% (-7.5% to 8.4%) 8-11 ","6.4% (2.3 to 10.5%)")),
+         quartile = case_when(quartile ==1 ~"<7",
+                              quartile == 2~"7-11 ",
+                              quartile == 3~"11-16",
+                              quartile ==4~">16")%>%
+           factor(levels = c(">16","11-16","7-11 ","<7")))
+hte_results_plot_df <- hte_results %>%
+  filter(term == ".fitted") %>%
+  select(quartile, term, estimate, conf.low, conf.high) %>%
+  mutate(across(where(is.numeric), ~ . * 100)) %>%
+  mutate(
+    color = c("white", "grey", "white", "grey"),
+    quartile_id = as.numeric(factor(quartile))
+  )
+
+ggplot(hte_results_plot_df, aes(x = quartile_id, y = estimate)) +
+  # 1) Gray/white band for each quartile "row"
+  geom_rect(
+    aes(
+      xmin = quartile_id - 0.5,
+      xmax = quartile_id + 0.5,
+      ymin = -Inf,
+      ymax = Inf,
+      fill = color
+    ),
+    alpha = 0.3,
+    inherit.aes = FALSE
+  ) +
+  scale_fill_identity() +
+  
+  # 2) Point estimates & confidence intervals
+  geom_point() +
+  geom_errorbar(aes(ymin = conf.low, ymax = conf.high), width = 0.2) +
+  
+  # 3) Reference line at zero (or 1 if odds ratios)
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  
+  # 4) X-axis = numeric quartile_id (1..4), but label with quartile text
+  scale_x_continuous(
+    limits = c(0.5, 4.5),  # extends the shading fully
+    breaks = hte_results_plot_df$quartile_id,
+    labels = hte_results_plot_df$quartile
+  ) +
+  
+  # 5) Flip coordinates (so quartiles are on the left)
+  coord_flip() +
+  
+  # 6) Axis labels to match your figure style
+  #    - If these are odds ratios, rename "Absolute change..." accordingly.
+  labs(
+    x = "WBC Quartile",
+    y = "\n\n\nAbsolute Change in 30-Day Mortality (%)"
+  ) +
+  
+  # 7) Optional text “Favors …” placed below the figure
+  annotate("text",
+    x = -2.5,  # near bottom quartile (after flip)
+    y = -5,  # far left on the horizontal scale
+    label = "Favors Piperacillin/tazobactam",
+    hjust = 0.5
+  ) +
+  annotate("text",
+    x = -2.5,
+    y = 7.5,
+    label = "Favors Cefepime",
+    hjust = 0.5
+  ) +
+  
+  # 8) Basic theme tweaks
+  theme_bw() +
+  theme(
+    panel.border = element_blank(),
+    panel.grid   = element_blank(),
+    axis.ticks   = element_blank(),
+    axis.line.x  = element_line(),
+    axis.text    = element_text(color = "black", size = 11)
+  )
+```
+
+
+IV. Sensitivity analyses
+Now we will replicate the sensitivity analyses we conducted for the primary analyses for this HTE analysis.
+
+We will first check if adjusting the modeling technique, using logistic regression instead of the 2 stage linear regression, will adjust the results.
+
+The first stage linear regression model predicting treatment will remain the same.
+
+In the second stage, we will use a logistic regression model = using the residuals from the first stage as a covariate in the second stage to avoid biased estimates.
+
+This dual approach checks whether conclusions are consistent across different modeling frameworks, addressing potential concerns about linearity and model assumptions. Including the .resid term in the logistic regression helps account for variability unexplained by the first-stage model, making it robust against violations of the exclusion restriction in the instrumental variable (IV) setting.
+
+First we’ll do the overall model here including an interaction term.
+
+```{r}
+# Step 1: Fit a single pooled first-stage model
+pooled_first_stage <- lm(
+  Piperacillin_tazobactam ~ instrument*wbc + decade + charlson_score + sofa_max_24bcx+ time_to_rx + female + non_white,
+  data = hte_df,
+)
+
+
+hte_matched <- hte_df %>%
+  rownames_to_column(".rownames")%>%
+  inner_join(augment(pooled_first_stage))
+
+# Step 3: Fit second stage logisitic regression with residuals included
+  # .fitted = predicted treatment from the first stage model
+  # .resid = residuals from the first stage model
+second_stage_logistic_regression<- glm(
+      die_within_30d~ decade + charlson_score + sofa_max_24bcx+ time_to_rx + female +non_white+
+        .fitted*wbc+.resid,family="binomial",
+      data = hte_matched,
+    )
+
+
+# Step 4: display odds ratio estimates with the tidy function from the broom package
+# we'll select the estimate column (the point estimate of the odds ratio)
+# the lower and upper bounds of the confidence interval
+# and the p-value
+
+tidy(second_stage_logistic_regression, conf.int = T, exponentiate = T)%>%
+  dplyr::select(term, estimate, conf.low, conf.high, p.value)%>%
+  filter(term != "(Intercept)")%>%
+  mutate(term = case_when(term == ".fitted" ~"Piperacillin-tazobactam",
+                          term == ".resid"~ "First-stage residual",
+                          term == ".fitted:wbc" ~"Piperacillin-tazobactam:wbc",
+                          T ~ term))%>%
+  mutate(across(c(estimate:conf.high), ~round(., 2)))%>%
+  mutate(p.value = round(p.value, 3),
+         p.value = if_else(p.value <0.001, "<0.01",as.character(p.value)))%>%
+  unite("CI",conf.low, conf.high, sep="-")%>%
+  unite("estimate",estimate, CI, sep= " (")%>%
+  mutate(estimate = str_c(estimate, ")"))%>%
+  mutate(term = factor(term, levels=c("Piperacillin-tazobactam",
+                                      "Piperacillin-tazobactam:wbc","wbc",
+                                      "charlson_score","sofa_max_24bcx","decade",
+                                      "non_white","female","time_to_rx","First-stage residual"
+                                      )))%>%
+  arrange(term)
+
+hte_results_or <- hte_matched %>%
+  group_by(quartile) %>%
+  
+# Perform quartile-specific second-stage logistic regression using the pooled first-stage results, now including the reiduals in the
+  # .fitted = predicted treatment from the first stage model
+  # .resid = residuals from the first stage model
+  group_modify(~ {
+    model <- glm(
+      die_within_30d~ decade + charlson_score + sofa_max_24bcx+ time_to_rx + female +non_white+
+        .fitted+.resid,family="binomial",
+      data = .,
+    )
+    tidy(model, conf.int = TRUE,exponentiate=T) %>% mutate(quartile = unique(.x$quartile))  # Add quartile to results
+  }) %>%
+  ungroup()
+
+# Visualize the effects across WBC quartiles
+hte_results_or %>%
+  mutate(quartile = case_when(quartile == 1 ~ "0.77 (0.52-1.16) <  7 ",
+                              quartile == 2 ~ "0.88 (0.61-1.26) 7-11 ",
+                              quartile == 3 ~ "1.03 (0.66-1.61) 11-16",
+                              quartile == 4 ~ "1.76 (1.26-2.46) > 16 ")%>%
+           factor(.,levels= rev(c("1.76 (1.26-2.46) > 16 ",
+                                "1.03 (0.66-1.61) 11-16",
+                                "0.88 (0.61-1.26) 7-11 ",
+                                "0.77 (0.52-1.16) <  7 "))))%>%
+  filter(term == ".fitted") %>%
+  mutate(color = c("white","grey","white","grey"))%>%
+  dplyr::select(quartile, estimate,conf.low, conf.high)%>%
+  ggplot(aes(x = quartile, y = estimate)) +
+  geom_point() +
+  geom_errorbar(aes(ymin = conf.low, ymax = conf.high), width = 0.2) +
+  labs(
+    x = NULL,
+    y = "\nOdds ratio for 30-day mortality\nPiperacillin-tazobactam treatment"
+  ) +
+  geom_hline(aes(yintercept=1), linetype="dashed")+
+  theme_bw()+
+  theme(panel.border = element_blank(),
+        panel.grid = element_blank(),
+        axis.ticks = element_blank(),
+        axis.line.x = element_line(),
+        axis.title.y.left = element_text(angle=0, vjust=0.5),
+        axis.text = element_text(color = "black", size = 11))+
+  coord_flip(xlim=c(1,5),ylim=c(-0.1,2.5))+
+  annotate(
+    "text",
+    x = 4.75,
+    y = 0.25,
+    label = "Favor\nPiperacillin-tazobactam",
+  ) +
+  annotate(
+    "text",
+    x = 4.75,
+    y = 2,
+    label = "Favor\nCefepime",
+  )
+
+hte_results_or %>%
+  mutate(
+    # Recode quartile labels and set factor levels
+    quartile = case_when(
+      quartile == 1 ~ "0.77 (0.52-1.16) <  7 ",
+      quartile == 2 ~ "0.88 (0.61-1.26) 7-11 ",
+      quartile == 3 ~ "1.03 (0.66-1.61) 11-16",
+      quartile == 4 ~ "1.76 (1.26-2.46) > 16 "
+    ) %>%
+      factor(., levels = c(
+        "1.76 (1.26-2.46) > 16 ",
+        "1.03 (0.66-1.61) 11-16",
+        "0.88 (0.61-1.26) 7-11 ",
+        "0.77 (0.52-1.16) <  7 "
+      ))
+  ) %>%
+  filter(term == ".fitted") %>%
+  # Create a variable to alternate fill color by odd/even quartile index
+  mutate(
+    quart_idx = as.numeric(quartile),
+    stripe_bg = ifelse(quart_idx %% 2 == 1,  "white","grey75")
+  ) %>%
+  ggplot() +
+  # Draw background rectangles first
+  geom_rect(
+    aes(
+      xmin = quart_idx - 0.5,
+      xmax = quart_idx + 0.5,
+      ymin = 0.25,      # your lower y-limit
+      ymax = 2.5,       # your upper y-limit
+      fill = stripe_bg
+    ),
+    alpha = 0.6
+  ) +
+  # Now draw your points and confidence intervals
+  geom_point(aes(x = quartile, y = estimate), size=2, type="square") +
+  geom_segment(aes(
+    x = quartile,
+    xend = quartile,
+    y = conf.low, 
+    yend = conf.high
+  ), size=0.75) +
+  geom_hline(aes(yintercept = 1), linetype = "dashed") +
+  coord_flip(ylim = c(0.25, 2.5)) +
+  labs(x = NULL, y = NULL) +
+  # Let ggplot know that stripe_bg is already a color
+  scale_fill_identity() +
+  theme_bw() +
+  theme(
+    panel.border = element_blank(),
+    panel.grid   = element_blank(),
+    axis.text = element_text(color="black",size=12, family = "Arial"),
+    aspect.ratio = 0.5
+  )
+```
+
+```{r}
+# Perform quartile-specific second-stage logistic regression using the pooled first-stage results, now including the reiduals in the
+  # .fitted = predicted treatment from the first stage model
+  # .resid = residuals from the first stage model
+hte_results_abs <- hte_matched %>%
+  group_by(quartile) %>%
+  group_modify(~ {
+    model <- glm(
+      die_within_30d ~ .fitted + decade + charlson_score + sofa_max_24bcx + time_to_rx + female + non_white + .resid,
+      family = "binomial",
+      data = .
+    )
+    
+# for each model, we'll calculate the absolute change in mortality associated with piperacillin-tazobactam treatment (.fitted) with the margins package
+    marginal_effects <- margins(model, variables = ".fitted")
+    summary(marginal_effects) %>%
+      as.data.frame() %>%
+      mutate(quartile = unique(.x$quartile))
+  }) %>%
+  ungroup()
+
+# View results
+hte_results_abs%>%
+  mutate(quartile = case_when(quartile == 1 ~ "6.7% (2.8 to 10.6%) <  8 ",
+                              quartile == 2 ~ "0.4% (-7.5 to 8.3%) 8-11 ",
+                              quartile == 3 ~ "-1.9% (-7.5 to 3.5%) 12-16",
+                              quartile == 4 ~ "-3.0 (-7.8 to 1.8%) > 16 ")%>%
+           factor(levels= rev(c("6.7% (2.8 to 10.6%) <  8 ",
+                                "0.4% (-7.5 to 8.3%) 8-11 ",
+                                "-1.9% (-7.5 to 3.5%) 12-16",
+                                "-3.0 (-7.8 to 1.8%) > 16 "))))%>%
+  mutate(across(c(AME, lower, upper), ~.*100))%>%
+  ggplot(aes(x= quartile, y = AME))+
+  geom_point()+
+  geom_errorbar(aes(ymin = lower, ymax = upper), width = 0.2) +
+  labs(
+    x = NULL,
+    y = "\nAbsolute change in 30-day mortality (%)\nPiperacillin-tazobactam treatment"
+  ) +
+  geom_hline(aes(yintercept=0), linetype="dashed")+
+  theme_bw()+
+  theme(panel.border = element_blank(),
+        panel.grid = element_blank(),
+        axis.ticks = element_blank(),
+        axis.line.x = element_line(),
+        axis.title.y.left = element_text(angle=0, vjust=0.5),
+        axis.text = element_text(color = "black", size = 11))+
+  coord_flip(xlim=c(1,5))+
+  annotate(
+    "text",
+    x = 5,
+    y = -5,
+    label = "Favor\nPiperacillin-tazobactam",
+  ) +
+  annotate(
+    "text",
+    x = 5,
+    y = 7.5,
+    label = "Favor\nCefepime",
+  )
+```
+
+V. Sensitivity analyses for potential violations of the exclusion restriction principle.
+We’ve tested alternative modeling approaches and inclusion of a residual term from the first stage model to account for violations of teh exclusion restriction.
+
+Now, we’ll test the same potentially confounding variables from our primary initial analysis: the year of admission to account for temporal trends, the source of infection and other antibiotic use.
+
+We’ll start with year of admission
+
+```{r}
+
+
+m_year <- ivreg(
+  die_within_30d~ Piperacillin_tazobactam  +
+    decade + female + charlson_score + SOFA + 
+    time_to_rx+ non_white+
+    Piperacillin_tazobactam:wbc+wbc+year|
+    decade + female + charlson_score + SOFA+ 
+    non_white+
+    instrument + instrument:wbc+wbc+
+    time_to_rx+year,
+  data = hte_df
+)
+
+
+
+summary(m_year)
+
+tidy(m_year, conf.int=T)%>%
+  dplyr::select(term, estimate, conf.low, conf.high, p.value)%>%
+  mutate(across(where(is.numeric),~round(.,3)))%>%
+  unite("CI",conf.low, conf.high, sep=" to ")%>%
+  mutate(term=str_remove(term, "infection"),
+         term = factor(term, levels=c("Piperacillin_tazobactam","Piperacillin_tazobactam:wbc",
+                                      "wbc","charlson_score","SOFA",
+                                      "decade","female","non_white","time_to_rx",
+                                      "year","(Intercept)")))%>%
+  arrange(term)%>%
+  mutate(p.value = if_else(p.value<0.001, "<0.01",as.character(p.value)))
+
+m_year_reduced <- ivreg(
+  die_within_30d~ Piperacillin_tazobactam  +
+    decade + female + charlson_score + SOFA + 
+    time_to_rx+ non_white+
+    year+wbc|
+    decade + female + charlson_score + SOFA+ 
+    non_white+
+    instrument + 
+    time_to_rx+year+wbc,
+  data = hte_df
+)
+
+anova(m_year_reduced,m_year)
+
+tidy(m_year_reduced, conf.int=T)%>%
+  dplyr::select(term, estimate, conf.low, conf.high, p.value)%>%
+  mutate(across(where(is.numeric),~round(.,3)))%>%
+  unite("CI",conf.low, conf.high, sep=" to ")%>%
+  mutate(term=str_remove(term, "infection"),
+         term = factor(term, levels=c("Piperacillin_tazobactam","Piperacillin_tazobactam:wbc",
+                                      "wbc","charlson_score","SOFA",
+                                      "decade","female","non_white","time_to_rx",
+                                      "year","(Intercept)")))%>%
+  arrange(term)%>%
+  mutate(p.value = if_else(p.value<0.001, "<0.01",as.character(p.value)))
+
+```
+
+
+```{r}
+# source of infection
+
+m_infection <- ivreg(
+  die_within_30d~ Piperacillin_tazobactam  +
+    decade + female + charlson_score + SOFA + 
+    time_to_rx+ non_white+
+    Piperacillin_tazobactam:wbc+wbc+infection|
+    decade + female + charlson_score + SOFA+ 
+    non_white+
+    instrument + instrument:wbc+wbc+
+    time_to_rx+infection,
+  data = hte_df
+)
+
+
+
+summary(m_infection)
+
+tidy(m_infection, conf.int=T)%>%
+  dplyr::select(term, estimate, conf.low, conf.high, p.value)%>%
+  mutate(across(where(is.numeric),~round(.,3)))%>%
+  unite("CI",conf.low, conf.high, sep=" to ")%>%
+  mutate(term=str_remove(term, "infection"),
+         term = factor(term, levels=c("Piperacillin_tazobactam","Piperacillin_tazobactam:wbc",
+                                      "wbc","charlson_score","SOFA",
+                                      "decade","female","non_white","time_to_rx",
+                                      "LRI","UTI","SSTI","Unclear","(Intercept)")))%>%
+  arrange(term)%>%
+  mutate(p.value = if_else(p.value<0.001, "<0.01",as.character(p.value)))
+
+m_infection_reduced <- ivreg(
+  die_within_30d~ Piperacillin_tazobactam  +
+    decade + female + charlson_score + SOFA + 
+    time_to_rx+ non_white+
+    infection+wbc|
+    decade + female + charlson_score + SOFA+ 
+    non_white+
+    instrument + 
+    time_to_rx+infection+wbc,
+  data = hte_df
+)
+
+
+anova(m_infection_reduced,m_infection)
+
+tidy(m_infection_reduced, conf.int=T)%>%
+  dplyr::select(term, estimate, conf.low, conf.high, p.value)%>%
+  mutate(across(where(is.numeric),~round(.,3)))%>%
+  unite("CI",conf.low, conf.high, sep=" to ")%>%
+  mutate(term=str_remove(term, "infection"),
+         term = factor(term, levels=c("Piperacillin_tazobactam","Piperacillin_tazobactam:wbc",
+                                      "wbc","charlson_score","SOFA",
+                                      "decade","female","non_white","time_to_rx",
+                                      "LRI","UTI","SSTI","Unclear","(Intercept)")))%>%
+  arrange(term)%>%
+  mutate(p.value = if_else(p.value<0.001, "<0.01",as.character(p.value)))
+
+
+```
+
+
+```{r}
+#other antibiotic use
+
+m_other_abx <- ivreg(
+  die_within_30d~ Piperacillin_tazobactam  +
+    decade + female + charlson_score + SOFA + 
+    time_to_rx+ non_white+
+    Piperacillin_tazobactam:wbc+wbc+
+    Amoxicillin+Ampicillin_sulbactam+Aztreonam+Cefpodoxime+
+    Ceftriaxone+Levofloxacin+Clindamycin+Metronidazole|
+    decade + female + charlson_score + SOFA+ 
+    non_white+
+    instrument + instrument:wbc+wbc+
+    time_to_rx+
+    Amoxicillin+Ampicillin_sulbactam+Aztreonam+Cefpodoxime+
+    Ceftriaxone+Levofloxacin+Clindamycin+Metronidazole,
+  data = hte_df
+)
+
+
+
+summary(m_other_abx)
+
+m_other_abx%>%
+  tidy(conf.int=T)%>%
+  mutate(across(where(is.numeric), ~round(.,3)))%>%
+  dplyr::select(term, estimate, conf.low, conf.high, p.value)%>%
+  unite("CI", conf.low, conf.high, sep=" to ")%>%
+  mutate(term = factor(term, levels=c("Piperacillin_tazobactam","Piperacillin_tazobactam:wbc","wbc", "Amoxicillin","Ampicillin_sulbactam","Aztreonam","Cefpodoxime","Ceftriaxone","Levofloxacin","Clindamycin","Metronidazole",
+                                      "charlson_score","SOFA","decade","female","non_white","time_to_rx","(Intercept)")))%>%
+  arrange(term)
+
+m_other_abx_reduced <- ivreg(
+  die_within_30d~ Piperacillin_tazobactam  +
+    decade + female + charlson_score + SOFA + 
+    time_to_rx+ non_white+
+    Amoxicillin+Ampicillin_sulbactam+Aztreonam+Cefpodoxime+
+    Ceftriaxone+Levofloxacin+Clindamycin+Metronidazole+wbc|
+    decade + female + charlson_score + SOFA+ 
+    non_white+
+    instrument + 
+    time_to_rx+
+    Amoxicillin+Ampicillin_sulbactam+Aztreonam+Cefpodoxime+
+    Ceftriaxone+Levofloxacin+Clindamycin+Metronidazole+wbc,
+  data = hte_df
+)
+
+anova(m_other_abx_reduced,m_other_abx)
+
+m_other_abx_reduced%>%
+  tidy(conf.int=T)%>%
+  mutate(across(where(is.numeric), ~round(.,3)))%>%
+  dplyr::select(term, estimate, conf.low, conf.high, p.value)%>%
+  unite("CI", conf.low, conf.high, sep=" to ")%>%
+  mutate(term = factor(term, levels=c("Piperacillin_tazobactam","wbc", "Amoxicillin","Ampicillin_sulbactam","Aztreonam","Cefpodoxime","Ceftriaxone","Levofloxacin","Clindamycin","Metronidazole",
+                                      "charlson_score","SOFA","decade","female","non_white","time_to_rx","(Intercept)")))%>%
+  arrange(term)
+
+
+```
+
