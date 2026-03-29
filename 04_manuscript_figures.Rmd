@@ -1,0 +1,417 @@
+---
+title: "Manuscript Figures"
+author: "Dan Rzewnicki"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    code_folding: show
+    theme: flatly
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo    = TRUE,
+  warning = FALSE,
+  message = FALSE,
+  fig.width  = 7,
+  fig.height = 8,
+  dpi        = 300
+)
+```
+
+## Load packages
+
+```{r packages}
+required_packages <- c("tidyverse", "here", "broom", "purrr", "patchwork", "knitr")
+
+installed <- rownames(installed.packages())
+to_install <- setdiff(required_packages, installed)
+if (length(to_install) > 0) install.packages(to_install)
+
+library(tidyverse)
+library(here)
+library(broom)
+library(purrr)
+library(patchwork)
+```
+
+## Load data
+
+```{r load-data}
+df_analysis <- readRDS(here("data", "analysis_dataset.rds"))
+```
+
+---
+
+## Shared theme
+
+```{r theme}
+# Apply once here; all figures below inherit it automatically
+theme_manuscript <- theme_bw(base_size = 12) +
+  theme(
+    panel.grid.minor  = element_blank(),
+    strip.background  = element_rect(fill = "grey92", color = NA),
+    legend.position   = "bottom",
+    plot.title        = element_text(face = "bold", size = 13),
+    plot.subtitle     = element_text(size = 11, color = "grey40"),
+    axis.title        = element_text(size = 11),
+    axis.text         = element_text(size = 10)
+  )
+
+theme_set(theme_manuscript)
+```
+
+## Shared model setup
+
+The covariate set and quartile labels are defined once and used for all four outcomes.
+
+```{r shared-setup}
+# Covariates used in every quartile-stratified model
+quartile_covariates <- c(
+  "trt_group", "age", "sex", "baseline_sofa",
+  "baseline_vent", "baseline_anyvasopressor",
+  "source_of_infection", "preill_creat", "priorhd"
+)
+
+# Quartile labels — update cutpoints to match your data
+quartile_labels <- c("<7", "7-11", "11-16", ">16")
+```
+
+---
+
+## Helper function — fit models by quartile
+
+This function takes an outcome variable name and returns a tidy data frame of
+odds ratios for `trt_group` within each WBC quartile. Using `tidy(conf.int = TRUE)`
+avoids the list-column alignment issue that can occur when unnesting `confint()`
+output separately.
+
+```{r or-function}
+get_quartile_ORs <- function(outcome_var, data, covariate_set, q_labels) {
+
+  f <- as.formula(
+    paste(outcome_var, "~", paste(covariate_set, collapse = " + "))
+  )
+
+  data %>%
+    mutate(wbc_quartile = factor(wbc_quartile,
+                                 levels = 1:4,
+                                 labels = q_labels)) %>%
+    group_by(wbc_quartile) %>%
+    nest() %>%
+    mutate(
+      fit    = map(data, ~ glm(f, data = .x, family = "binomial")),
+      output = map(fit,  ~ tidy(.x, conf.int = TRUE, exponentiate = TRUE))
+    ) %>%
+    unnest(output) %>%
+    filter(term == "trt_groupzosyn") %>%
+    select(wbc_quartile,
+           OR     = estimate,
+           LL     = conf.low,
+           UL     = conf.high,
+           p      = p.value) %>%
+    mutate(across(c(OR, LL, UL), ~ round(.x, 3)),
+           p = round(p, 4))
+}
+```
+
+---
+
+## Fit models for each outcome
+
+```{r fit-all}
+or_mortality <- get_quartile_ORs("inhosp_mortality28", df_analysis,
+                                  quartile_covariates, quartile_labels)
+
+or_make14    <- get_quartile_ORs("MAKE14",             df_analysis,
+                                  quartile_covariates, quartile_labels)
+
+or_coma      <- get_quartile_ORs("comagdelc14",        df_analysis,
+                                  quartile_covariates, quartile_labels)
+
+or_aki       <- get_quartile_ORs("incident_aki_with_onstudy_14.factor",
+                                  df_analysis, quartile_covariates, quartile_labels)
+```
+
+---
+
+## Figure — Combined forest plot
+
+```{r forest-plot-function}
+# Shared theme for all panels
+theme_forest <- theme_manuscript +
+  theme(
+    panel.grid.major.y = element_blank(),   # no horizontal grid in forest plots
+    axis.title.y       = element_blank(),   # y-axis label not needed (groups are self-labeling)
+    plot.margin        = margin(4, 8, 4, 8)
+  )
+
+# Function to draw one panel of the forest plot
+forest_panel <- function(data, title, x_limits = c(0.2, 5)) {
+
+  ggplot(data, aes(x = OR, y = fct_rev(wbc_quartile))) +
+    geom_vline(xintercept = 1, linetype = "dashed",
+               color = "grey50", linewidth = 0.5) +
+    geom_errorbarh(aes(xmin = LL, xmax = UL),
+                   height = 0.2, linewidth = 0.7, color = "#2166ac") +
+    geom_point(aes(color = OR < 1), size = 3.5) +
+    scale_color_manual(
+      values = c("TRUE" = "#2166ac", "FALSE" = "#d73027"),
+      guide  = "none"
+    ) +
+    scale_x_log10(limits = x_limits,
+                  breaks  = c(0.25, 0.5, 1, 2, 4),
+                  labels  = c("0.25", "0.5", "1.0", "2.0", "4.0")) +
+    # Add OR (95% CI) as text labels to the right of each point
+    geom_text(
+      aes(x     = x_limits[2],
+          label = sprintf("%.2f (%.2f, %.2f)", OR, LL, UL)),
+      hjust  = 1,
+      size   = 3,
+      color  = "grey30"
+    ) +
+    labs(title = title,
+         x     = "Odds ratio (log scale)") +
+    theme_forest
+}
+```
+
+```{r combined-forest, fig.height=10}
+p_mortality <- forest_panel(or_mortality, "28-day in-hospital mortality")
+p_make14    <- forest_panel(or_make14,    "MAKE-14")
+p_coma      <- forest_panel(or_coma,      "Coma or delirium (comagdelc14)")
+p_aki       <- forest_panel(or_aki,       "Incident AKI")
+
+# Stack all four panels using patchwork
+# collect_axes = TRUE shares the x-axis label across panels
+combined_forest <- (p_mortality / p_make14 / p_coma / p_aki) +
+  plot_annotation(
+    title    = "Figure X. Odds of outcomes by WBC quartile (Zosyn vs. comparator)",
+    subtitle = "Points are odds ratios; horizontal lines are 95% confidence intervals.\nBlue = OR < 1 (favors Zosyn); red = OR > 1 (favors comparator).",
+    theme    = theme(
+      plot.title    = element_text(face = "bold", size = 13),
+      plot.subtitle = element_text(size = 10, color = "grey40")
+    )
+  ) &
+  theme(axis.title.x = element_text(size = 10))
+
+combined_forest
+```
+
+---
+
+## Save figure
+
+```{r save-figure}
+dir.create(here("output"), showWarnings = FALSE)
+
+ggsave(here("output", "fig_quartile_forest_combined.pdf"),
+       combined_forest, width = 7, height = 10, dpi = 300)
+
+ggsave(here("output", "fig_quartile_forest_combined.tiff"),
+       combined_forest, width = 7, height = 10, dpi = 300)
+
+cat("Combined forest plot saved to output/\n")
+```
+
+---
+
+## Export underlying data
+
+```{r export-or-data}
+# Combine all four outcome OR tables and export as one CSV
+# Useful for supplementary tables or editorial review
+all_or_data <- bind_rows(
+  or_mortality %>% mutate(outcome = "28-day mortality"),
+  or_make14    %>% mutate(outcome = "MAKE-14"),
+  or_coma      %>% mutate(outcome = "Coma or delirium"),
+  or_aki       %>% mutate(outcome = "Incident AKI")
+) %>%
+  select(outcome, wbc_quartile, OR, LL, UL, p)
+
+write.csv(all_or_data,
+          here("output", "results_quartile_forest_data.csv"),
+          row.names = FALSE)
+
+knitr::kable(
+  all_or_data,
+  caption   = "Odds ratios by WBC quartile for all outcomes",
+  col.names = c("Outcome", "WBC Quartile", "OR", "95% CI low", "95% CI high", "p-value")
+)
+```
+
+---
+
+## Figure — Clinical cutoff forest plot (mortality only)
+
+```{r forest with different WBC cutoff}
+
+# Get ORs using the same helper function from the quartile section,
+# but grouping by wbc_clinical instead of wbc_quartile
+clinical_OR_data <- df_analysis %>%
+  mutate(wbc_clinical = as.factor(case_when(
+    baseline_wbc <= 4 ~ "<4",
+    baseline_wbc > 4 & baseline_wbc <= 10 ~ "4-10",
+    baseline_wbc > 10 ~ ">10"
+  ))) %>%
+  group_by(wbc_clinical) %>%
+  nest() %>%
+  mutate(
+    fit    = map(data, ~ glm(inhosp_mortality28 ~ trt_group + age + sex +
+                               baseline_sofa + baseline_vent +
+                               baseline_anyvasopressor + source_of_infection +
+                               preill_creat + priorhd,
+                             data = .x, family = "binomial")),
+    output = map(fit, ~ tidy(.x, conf.int = TRUE, exponentiate = TRUE))
+  ) %>%
+  unnest(output) %>%
+  filter(term == "trt_groupzosyn") %>%
+  select(wbc_clinical,
+         OR  = estimate,
+         LL  = conf.low,
+         UL  = conf.high,
+         p   = p.value) %>%
+  mutate(across(c(OR, LL, UL), ~ round(.x, 3)),
+         p           = round(p, 4),
+         wbc_clinical = factor(wbc_clinical))   # ensure factor for plotting
+
+# Reuse forest_panel() — just pass wbc_clinical as the grouping variable
+# forest_panel() expects a column named wbc_quartile, so rename for compatibility
+clinical_forest <- clinical_OR_data %>%
+  rename(wbc_quartile = wbc_clinical) %>%
+  forest_panel(
+    data      = .,
+    title     = "28-day in-hospital mortality — clinical WBC cutoffs",
+    x_limits  = c(0.2, 5)
+  ) +
+  labs(
+    x        = "Odds ratio (log scale)\nFavors piperacillin-tazobactam          Favors cefepime",
+    caption  = "Points are odds ratios; horizontal lines are 95% confidence intervals.\nBlue = OR < 1 (favors piperacillin-tazobactam); red = OR > 1 (favors cefepime)."
+  )
+
+clinical_forest
+
+# Save
+ggsave(here("output", "fig_clinical_cutoff_forest.pdf"),
+       clinical_forest, width = 7, height = 4, dpi = 300)
+
+ggsave(here("output", "fig_clinical_cutoff_forest.tiff"),
+       clinical_forest, width = 7, height = 4, dpi = 300)
+
+```
+
+--- 
+
+## Figure — Predicted probability of 28-day mortality by baseline WBC and treatment
+
+``` {r predicted morality figure}
+
+### Fit model
+
+# This is the same interaction model from 03_logistic_regression.Rmd.
+# Re-fitted here so the figures script is self-contained and can be
+# run independently without sourcing the regression script.
+moda <- glm(
+  inhosp_mortality28 ~ trt_group + baseline_wbc + baseline_wbc:trt_group +
+    age + sex + baseline_sofa + baseline_vent + baseline_anyvasopressor +
+    source_of_infection + location + preill_creat + priorhd,
+  data   = df_analysis,
+  family = "binomial"
+)
+
+### Build prediction grid
+
+# Continuous WBC sequence for smooth curves
+wbc_seq <- seq(1, 35, by = 0.5)
+
+# All covariates other than WBC and treatment are held at their
+# median (continuous) or most common value (categorical).
+# Using median() / names(sort())[length()] rather than a hardcoded
+# template row makes this robust if the dataset changes.
+pred_grid <- expand.grid(
+  baseline_wbc = wbc_seq,
+  trt_group    = levels(df_analysis$trt_group)
+) %>%
+  mutate(
+    age                     = median(df_analysis$age,           na.rm = TRUE),
+    sex                     = names(sort(table(df_analysis$sex),          decreasing = TRUE))[1],
+    baseline_sofa           = median(df_analysis$baseline_sofa, na.rm = TRUE),
+    baseline_vent           = names(sort(table(df_analysis$baseline_vent), decreasing = TRUE))[1],
+    baseline_anyvasopressor = names(sort(table(df_analysis$baseline_anyvasopressor), decreasing = TRUE))[1],
+    source_of_infection     = names(sort(table(df_analysis$source_of_infection), decreasing = TRUE))[1],
+    location                = names(sort(table(df_analysis$location),     decreasing = TRUE))[1],
+    preill_creat            = median(df_analysis$preill_creat,  na.rm = TRUE),
+    priorhd                 = names(sort(table(df_analysis$priorhd),      decreasing = TRUE))[1],
+    # Re-apply factor levels to match the fitted model
+    across(where(is.character), ~ factor(.x, levels = levels(df_analysis[[cur_column()]])))
+  )
+
+### Predict
+
+pred_grid <- pred_grid %>%
+  mutate(pred_prob = predict(moda, newdata = pred_grid, type = "response"))
+
+### Plot
+
+predicted_mortality_plot <- ggplot(
+  pred_grid,
+  aes(x = baseline_wbc, y = pred_prob, color = trt_group)
+) +
+  geom_line(linewidth = 1.2) +
+  # Mark the three clinical cutpoints used in the forest plot
+  geom_vline(xintercept = c(7, 11, 16),
+             linetype = "dashed", color = "grey70", linewidth = 0.4) +
+  annotate("text", x = c(7, 11, 16), y = 0,
+           label = c("7", "11", "16"),
+           vjust = -0.5, hjust = -0.2, size = 3, color = "grey50") +
+  scale_y_continuous(
+    labels = scales::percent_format(accuracy = 1),
+    limits = c(0, NA)
+  ) +
+  scale_color_manual(
+    values = c("#0072B2", "#D55E00"),
+    labels = c("zosyn"    = "Piperacillin-tazobactam",
+               "cefepime" = "Cefepime")
+  ) +
+  labs(
+    title   = "Predicted 28-day mortality by baseline WBC and treatment group",
+    subtitle = paste0(
+      "Other covariates held at median (continuous) or most common value (categorical).\n",
+      "Dashed lines mark WBC = 7, 11, and 16."
+    ),
+    x     = "Baseline white blood cell count (x10\u00b3/\u03bcL)",
+    y     = "Predicted probability of 28-day mortality",
+    color = "Treatment group"
+  ) +
+  theme_manuscript +     # reuses the shared theme defined earlier in 04_figures.Rmd
+  theme(
+    legend.position    = "bottom",
+    legend.title       = element_text(face = "bold"),
+    axis.title         = element_text(face = "bold"),
+    axis.text          = element_text(color = "black"),
+    panel.grid.major.y = element_line(color = "gray90", linewidth = 0.3)
+  )
+
+predicted_mortality_plot
+
+### Save
+
+ggsave(here("output", "fig_predicted_mortality_wbc.pdf"),
+       predicted_mortality_plot, width = 7, height = 5, dpi = 300)
+
+ggsave(here("output", "fig_predicted_mortality_wbc.tiff"),
+       predicted_mortality_plot, width = 7, height = 5, dpi = 300)
+
+cat("Predicted mortality figure saved to output/\n")
+
+```
+
+---
+
+## Session info
+
+```{r session-info}
+sessionInfo()
+```
